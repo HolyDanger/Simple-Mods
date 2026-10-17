@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include "runtime.h"
 #include "bridge.h"
+#include "localization.h"
 #include "NeighborMod.h"
 #include "MinHook.h"
 #include "imgui.h"
@@ -28,11 +29,17 @@ static int activeMod=0,hoveredNative=-1,modListTop=0;
 static double frameMs=0;static ImFont* font=nullptr;static ImFont* nativeFont=nullptr;
 using Present=HRESULT(WINAPI*)(IDXGISwapChain*,UINT,UINT);static Present originalPresent=nullptr;
 using Resize=HRESULT(WINAPI*)(IDXGISwapChain*,UINT,UINT,UINT,DXGI_FORMAT,UINT);static Resize originalResize=nullptr;
-struct Mod { std::wstring id;std::string name,description,version,author,error;fs::path dir;bool enabled=false,builtin=false,active=false;HMODULE dll=nullptr;const NeighborModV1* api=nullptr;};
+struct Mod { std::wstring id;std::string name,description,version,author;L10n::Key error=L10n::Key::None;DWORD errorCode=0;fs::path dir;bool enabled=false,builtin=false,active=false;HMODULE dll=nullptr;const NeighborModV1* api=nullptr;};
 static std::vector<Mod> mods;
 static std::wstring wide(const std::string&s){if(s.empty())return {};int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,s.data(),(int)s.size(),nullptr,0);std::wstring r(n,0);if(n)MultiByteToWideChar(CP_UTF8,0,s.data(),(int)s.size(),r.data(),n);return r;}
 static std::string utf8(const std::wstring&s){int n=WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),nullptr,0,nullptr,nullptr);std::string r(n,0);if(n)WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),r.data(),n,nullptr,nullptr);return r;}
 static std::wstring ini(const fs::path&p,const wchar_t* section,const wchar_t* key,const wchar_t* def=L""){wchar_t b[4096]{};GetPrivateProfileStringW(section,key,def,b,4096,p.c_str());return b;}
+static void initialLanguage(){
+ wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};GetUserDefaultLocaleName(locale,LOCALE_NAME_MAX_LENGTH);L10n::russian=L10n::IsRussian(locale);
+ wchar_t local[MAX_PATH]{};if(!GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH))return;
+ auto config=fs::path(local)/L"HelloNeighbor"/L"Saved"/L"Config"/L"WindowsNoEditor";
+ for(const auto* file:{L"Engine.ini",L"GameUserSettings.ini"}){auto culture=ini(config/file,L"Internationalization",L"Culture");if(!culture.empty())L10n::russian=L10n::IsRussian(culture);}
+}
 void Log(const char* s){std::lock_guard<std::mutex>g(logLock);if(root.empty())return;std::ofstream out(root/L"SimpleMods.log",std::ios::app);SYSTEMTIME t{};GetLocalTime(&t);char b[64];sprintf_s(b,"[%02d:%02d:%02d] ",t.wHour,t.wMinute,t.wSecond);out<<b<<s<<'\n';}
 static void save(){auto path=root/L"settings.ini";WritePrivateProfileStringW(L"CursorMenu",L"Enabled",cursorEnabled?L"1":L"0",path.c_str());WritePrivateProfileStringW(L"CursorMenu",L"Control",mouseMode?L"Mouse":L"Keyboard",path.c_str());for(auto&m:mods)if(!m.builtin)WritePrivateProfileStringW(L"Mods",m.id.c_str(),m.enabled?L"1":L"0",path.c_str());Bridge::SetMouse(cursorEnabled&&mouseMode);}
 static void drawText(float x,float y,float size,uint32_t col,const char* s){if(ImGui::GetCurrentContext()&&s)ImGui::GetForegroundDrawList()->AddText(font,size,{x,y},col,s);}
@@ -43,13 +50,13 @@ static bool safeFrame(const NeighborModV1* api,const NeighborFrameV1* f){__try{i
 static const NeighborModV1* safeEntry(NeighborModEntry entry){__try{return entry(1);}__except(EXCEPTION_EXECUTE_HANDLER){return nullptr;}}
 static void enable(Mod& m,bool value){
  if(m.builtin){cursorEnabled=value;m.enabled=value;m.active=value;save();return;}
- if(!value){if(m.active&&m.api&&!safeDisable(m.api))m.error="Ошибка при выключении мода";m.active=false;m.enabled=false;save();return;}
- m.error.clear();if(!m.dll){auto p=m.dir/L"mod.dll";if(!fs::is_regular_file(p)){m.error="Не найден mod.dll";return;}m.dll=LoadLibraryExW(p.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);if(!m.dll){m.error="Не удалось загрузить DLL (код "+std::to_string(GetLastError())+")";return;}auto entry=(NeighborModEntry)GetProcAddress(m.dll,"NeighborMod_GetAPI");if(!entry){m.error="Мод не поддерживает Simple Mods ABI 1";return;}m.api=safeEntry(entry);if(!m.api||m.api->size<sizeof(NeighborModV1)||m.api->abi!=1){m.api=nullptr;m.error="Несовместимая версия API мода";return;}}
- if(m.api&&safeEnable(m.api)){m.enabled=m.active=true;Log(("Enabled mod: "+m.name).c_str());}else m.error="Мод не смог запуститься";save();
+ if(!value){if(m.active&&m.api&&!safeDisable(m.api))m.error=L10n::Key::DisableFailed;m.active=false;m.enabled=false;save();return;}
+ m.error=L10n::Key::None;m.errorCode=0;if(!m.dll){auto p=m.dir/L"mod.dll";if(!fs::is_regular_file(p)){m.error=L10n::Key::MissingDll;return;}m.dll=LoadLibraryExW(p.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);if(!m.dll){m.errorCode=GetLastError();m.error=L10n::Key::LoadFailed;return;}auto entry=(NeighborModEntry)GetProcAddress(m.dll,"NeighborMod_GetAPI");if(!entry){m.error=L10n::Key::UnsupportedAbi;return;}m.api=safeEntry(entry);if(!m.api||m.api->size<sizeof(NeighborModV1)||m.api->abi!=1){m.api=nullptr;m.error=L10n::Key::InvalidApi;return;}}
+ if(m.api&&safeEnable(m.api)){m.enabled=m.active=true;Log(("Enabled mod: "+m.name).c_str());}else m.error=L10n::Key::EnableFailed;save();
 }
 static void loadMods(){
  auto cfg=root/L"settings.ini";cursorEnabled=ini(cfg,L"CursorMenu",L"Enabled",L"1")==L"1";mouseMode=ini(cfg,L"CursorMenu",L"Control",L"Mouse")!=L"Keyboard";
- Mod builtin;builtin.id=L"CursorMenu";builtin.name="CursorMenu";builtin.description="Добавляет управление мышью в меню игры и его разделах.";builtin.version="0.3.0";builtin.author="Simple Mods";builtin.enabled=builtin.active=cursorEnabled;builtin.builtin=true;mods.push_back(builtin);
+ Mod builtin;builtin.id=L"CursorMenu";builtin.name="CursorMenu";builtin.version="0.4.0";builtin.author="Simple Mods";builtin.enabled=builtin.active=cursorEnabled;builtin.builtin=true;mods.push_back(builtin);
  std::error_code ec;fs::create_directories(root/L"mods",ec);
  for(auto&d:fs::directory_iterator(root/L"mods",ec)){if(!d.is_directory())continue;auto p=d.path()/L"mod.ini";if(!fs::is_regular_file(p))continue;Mod m;m.id=d.path().filename().wstring();m.dir=d.path();m.name=utf8(ini(p,L"Mod",L"Name",m.id.c_str()));m.description=utf8(ini(p,L"Mod",L"Description"));m.version=utf8(ini(p,L"Mod",L"Version",L"1.0"));m.author=utf8(ini(p,L"Mod",L"Author",L"Неизвестен"));m.enabled=ini(cfg,L"Mods",m.id.c_str(),L"0")==L"1";mods.push_back(m);}
  Bridge::SetMouse(cursorEnabled&&mouseMode);
@@ -92,13 +99,13 @@ static HRESULT WINAPI present(IDXGISwapChain*s,UINT sync,UINT flags){
  auto menu=Bridge::Snapshot();bool anyMod=false;for(auto&m:mods)if(!m.builtin&&m.active&&m.api&&m.api->OnFrame)anyMod=true;
  if(!open&&!menu.visible&&!anyMod){guard.unlock();return originalPresent(s,sync,flags);}
  if(!target)makeTarget(s);
- ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();ui();NeighborFrameV1 frame{sizeof(frame),ImGui::GetIO().DisplaySize.x,ImGui::GetIO().DisplaySize.y,ImGui::GetIO().DeltaTime,open?1:0};for(auto&m:mods)if(!m.builtin&&m.active&&m.api&&!safeFrame(m.api,&frame)){m.active=m.enabled=false;m.error="Ошибка в обработчике кадра";Log(("Mod frame failed: "+m.name).c_str());}
+ ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();ui();NeighborFrameV1 frame{sizeof(frame),ImGui::GetIO().DisplaySize.x,ImGui::GetIO().DisplaySize.y,ImGui::GetIO().DeltaTime,open?1:0};for(auto&m:mods)if(!m.builtin&&m.active&&m.api&&!safeFrame(m.api,&frame)){m.active=m.enabled=false;m.error=L10n::Key::FrameFailed;Log(("Mod frame failed: "+m.name).c_str());}
  ImGui::Render();if(target){ID3D11RenderTargetView*previous=nullptr;ID3D11DepthStencilView*depth=nullptr;context->OMGetRenderTargets(1,&previous,&depth);context->OMSetRenderTargets(1,&target,nullptr);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());context->OMSetRenderTargets(1,&previous,depth);if(previous)previous->Release();if(depth)depth->Release();}
  guard.unlock();return originalPresent(s,sync,flags);
 }
 static HRESULT WINAPI resize(IDXGISwapChain*s,UINT n,UINT w,UINT h,DXGI_FORMAT fmt,UINT flags){std::unique_lock<std::recursive_mutex>guard(uiLock);if(target){target->Release();target=nullptr;}guard.unlock();return originalResize(s,n,w,h,fmt,flags);}
 DWORD WINAPI StartRuntime(void*){
- wchar_t path[MAX_PATH]{};GetModuleFileNameW(gModule,path,MAX_PATH);root=fs::path(path).parent_path()/L"SimpleMods";std::error_code ec;fs::create_directories(root,ec);Log("Simple Mods 0.3 starting; custom C++ runtime, ABI 1.");loadMods();
+ wchar_t path[MAX_PATH]{};GetModuleFileNameW(gModule,path,MAX_PATH);root=fs::path(path).parent_path()/L"SimpleMods";std::error_code ec;fs::create_directories(root,ec);initialLanguage();Log("Simple Mods 0.4 starting; custom C++ runtime, ABI 1.");loadMods();
  if(MH_Initialize()!=MH_OK){Log("MinHook initialization failed");return 1;}
  WNDCLASSW wc{};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=gModule;wc.lpszClassName=L"NeighborModsProbe";RegisterClassW(&wc);HWND dummy=CreateWindowW(wc.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,64,64,nullptr,nullptr,gModule,nullptr);
  DXGI_SWAP_CHAIN_DESC desc{};desc.BufferCount=1;desc.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.OutputWindow=dummy;desc.SampleDesc.Count=1;desc.Windowed=TRUE;desc.SwapEffect=DXGI_SWAP_EFFECT_DISCARD;IDXGISwapChain*chain=nullptr;ID3D11Device*dev=nullptr;ID3D11DeviceContext*ctx=nullptr;

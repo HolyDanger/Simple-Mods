@@ -1,5 +1,6 @@
 #include "bridge.h"
 #include "MinHook.h"
+#include "localization.h"
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -53,12 +54,32 @@ void cursor(U m,bool enable){
 thread_local bool nested=false; ULONGLONG lastUpdate=0;
 struct Translation { U widget; float value[2]; };
 U layoutMenu=0;std::vector<Translation> moved;
-U pauseModButton=0,pauseModOwner=0,frontLabel=0;
-alignas(16) unsigned char modsText[40]{};bool textReady=false;
+U pauseModButton=0,pauseModOwner=0,pauseModText=0,frontLabel=0;
+alignas(16) unsigned char modsText[2][40]{};bool textReady=false;
+bool makeText(const wchar_t* value,unsigned char* buffer){
+    U f=fn(textLib,"Conv_StringToText");int in=po(f,"inString"),out=po(f,"ReturnValue");
+    if(!f||in!=0||out!=16)return false;
+    struct String{const wchar_t*data;int count,capacity;}str{value,(int)wcslen(value)+1,(int)wcslen(value)+1};
+    memcpy(buffer,&str,sizeof str);original(textLib,f,buffer);return true;
+}
+bool prepareText(){
+    if(textReady)return true;
+    if(!textLib)return false;
+    textReady=makeText(L"MODS",modsText[0])&&makeText(L"МОДЫ",modsText[1]);return textReady;
+}
 bool setModsText(U widget){
-    if(!widget||!textLib)return false;
-    if(!textReady){static wchar_t label[]=L"МОДЫ";struct String{wchar_t*data;int count,capacity;}str{label,5,5};memcpy(modsText,&str,sizeof str);call(textLib,"Conv_StringToText",modsText);textReady=true;}
-    call(widget,"SetText",modsText+16);return true;
+    if(!valid(widget)||!prepareText())return false;
+    call(widget,"SetText",modsText[L10n::russian.load()?1:0]+16);return true;
+}
+void detectLanguage(U m){
+    static ULONGLONG checked=0;auto now=GetTickCount64();if(now-checked<500)return;checked=now;
+    int language=offset(m,"CurLanguage");
+    if(language>=0){
+        bool ru=read<unsigned char>(m+language)==1,before=L10n::russian.exchange(ru);
+        static bool reported=false;if((before!=ru||!reported)&&logMessage){reported=true;logMessage(ru?"Interface language: Russian (Hello Neighbor settings)":"Interface language: English (Hello Neighbor settings)");}
+    }
+    U front=prop(startMenu,"TB_Modding");if(valid(front))setModsText(front);
+    if(valid(pauseModText)&&valid(pauseModButton))setModsText(pauseModText);
 }
 U spawn(U cls,U outer){alignas(16) U args[3]{cls,outer,0};call(gameplay,"SpawnObject",args);return args[2];}
 U add(U parent,U widget,const char* function){U args[2]{widget,0};call(parent,function,args);return args[1];}
@@ -84,7 +105,7 @@ void createPauseMod(U m,const std::vector<U>& buttons){
     inserted.push_back(extra);states.insert(states.begin()+settingsIndex+1,inserted.begin(),inserted.end());
     call(parent,"ClearChildren",nullptr);
     for(auto&st:states){U s=add(parent,st.widget,"AddChildToVerticalBox");call(s,"SetPadding",st.padding);call(s,"SetSize",st.size);call(s,"SetHorizontalAlignment",&st.h);call(s,"SetVerticalAlignment",&st.v);}
-    pauseModButton=b;pauseModOwner=m;if(logMessage)logMessage("Native pause Mods button created with the Settings font and slot layout.");
+    pauseModButton=b;pauseModOwner=m;pauseModText=text;if(logMessage)logMessage("Native pause Mods button created with the Settings font and slot layout.");
 }
 bool extendBackground(U widget,const NativeRect&first,const NativeRect&last,float gap,int depth=0){
     if(!widget||depth>30)return false;
@@ -183,6 +204,7 @@ void update(){
     NativeMenu s;U m=displayed(menu)?menu:displayed(startMenu)?startMenu:0,owner=m;std::vector<U> buttons;U selector=0;bool modal=false;
     s.frontend=m&&m==startMenu;
     if(valid(m)){
+        detectLanguage(m);
         s.visible=displayed(m);
         if(s.visible){int co=offset(m,"CurScreen");s.screen=co>=0?read<unsigned char>(m+co):-1;s.main=s.screen==0;
             U data=0;int count=0;buttonGroup(m,s.screen,data,count,selector);s.selected=selector?read<int>(selector):0;
@@ -275,6 +297,8 @@ bool TakeActivation(){return deferredActivation.exchange(false);}
 void SetModFocus(bool value){modFocus=value;}
 void SetMouse(bool value){mouseEnabled=value;}
 }
+
+
 
 
 

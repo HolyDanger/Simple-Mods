@@ -26,26 +26,26 @@ static void ui(){
   float sc=std::min(W/1280.f,H/720.f);float pw=1000*sc,ph=535*sc,x=(W-pw)*.5f,y=(H-ph)*.5f;
   d->AddRectFilled({0,0},{W,H},IM_COL32(0,0,0,48));
   d->AddQuadFilled({x+12*sc,y+84*sc},{x+pw,y+66*sc},{x+pw-6*sc,y+ph-52*sc},{x,y+ph},IM_COL32(31,26,22,164));
-  quad(d,x-14*sc,y,pw*.55f,78*sc,IM_COL32(0,0,0,255),15*sc);txt(d,x+30*sc,y+10*sc,43*sc,IM_COL32_WHITE,"Моды");
+  quad(d,x-14*sc,y,pw*.55f,78*sc,IM_COL32(0,0,0,255),15*sc);txt(d,x+30*sc,y+10*sc,43*sc,IM_COL32_WHITE,L10n::Text(L10n::Key::Mods));
   int visibleRows=4;modListTop=std::clamp(modListTop,0,std::max(0,(int)mods.size()-visibleRows));
   if(activeMod<modListTop)modListTop=activeMod;if(activeMod>=modListTop+visibleRows)modListTop=activeMod-visibleRows+1;
   if(hit(x+12*sc,y+114*sc,300*sc,320*sc)&&io.MouseWheel!=0){modListTop=std::clamp(modListTop-(io.MouseWheel>0?1:-1),0,std::max(0,(int)mods.size()-visibleRows));activeMod=std::clamp(activeMod,modListTop,std::min((int)mods.size()-1,modListTop+visibleRows-1));}
   for(int i=modListTop;i<(int)mods.size()&&i<modListTop+visibleRows;i++){
    auto&m=mods[i];float yy=y+118*sc+(i-modListTop)*78*sc;bool over=hit(x+16*sc,yy,295*sc,68*sc);
    if(i==activeMod||over)quad(d,x+16*sc,yy,295*sc,68*sc,IM_COL32(0,0,0,i==activeMod?230:120),10*sc);
-   txt(d,x+40*sc,yy+4*sc,27*sc,IM_COL32_WHITE,m.name.c_str());txt(d,x+41*sc,yy+39*sc,17*sc,IM_COL32(221,216,207,255),m.enabled?"Включён":"Выключен");
+   txt(d,x+40*sc,yy+4*sc,27*sc,IM_COL32_WHITE,m.name.c_str());txt(d,x+41*sc,yy+39*sc,17*sc,IM_COL32(221,216,207,255),L10n::Text(m.enabled?L10n::Key::Enabled:L10n::Key::Disabled));
    if(over&&ImGui::IsMouseClicked(0)){activeMod=i;settings=false;}
   }
   auto&m=mods[activeMod];float rx=x+365*sc;txt(d,rx,y+118*sc,32*sc,IM_COL32_WHITE,m.name.c_str());
-  if(settings&&m.builtin){txt(d,rx,y+190*sc,24*sc,IM_COL32_WHITE,"Управление");
-   if(button(d,rx,y+241*sc,245*sc,47*sc,"Мышь",mouseMode)){mouseMode=true;save();}
-   if(button(d,rx+250*sc,y+241*sc,280*sc,47*sc,"Клавиатура",!mouseMode)){mouseMode=false;save();}
-  }else if(settings){txt(d,rx,y+191*sc,21*sc,IM_COL32_WHITE,"Дополнительных настроек нет.");}
-  else d->AddText(font,23*sc,{rx,y+188*sc},IM_COL32_WHITE,m.description.c_str(),nullptr,535*sc);
-  if(!m.error.empty())d->AddText(font,18*sc,{rx,y+340*sc},IM_COL32(255,175,147,255),m.error.c_str(),nullptr,535*sc);
-  if(button(d,rx,y+ph-102*sc,235*sc,48*sc,m.enabled?"Выключить":"Включить"))enable(m,!m.enabled);
-  if(button(d,rx+250*sc,y+ph-102*sc,285*sc,48*sc,settings?"Описание":"Настройки"))settings=!settings;
-  if(button(d,x+16*sc,y+ph-102*sc,295*sc,48*sc,"Назад"))toggleOpen();
+  if(settings&&m.builtin){txt(d,rx,y+190*sc,24*sc,IM_COL32_WHITE,L10n::Text(L10n::Key::Controls));
+   if(button(d,rx,y+241*sc,245*sc,47*sc,L10n::Text(L10n::Key::Mouse),mouseMode)){mouseMode=true;save();}
+   if(button(d,rx+250*sc,y+241*sc,280*sc,47*sc,L10n::Text(L10n::Key::Keyboard),!mouseMode)){mouseMode=false;save();}
+  }else if(settings){txt(d,rx,y+191*sc,21*sc,IM_COL32_WHITE,L10n::Text(L10n::Key::NoSettings));}
+  else d->AddText(font,23*sc,{rx,y+188*sc},IM_COL32_WHITE,m.builtin?L10n::Text(L10n::Key::CursorDescription):m.description.c_str(),nullptr,535*sc);
+  if(m.error!=L10n::Key::None){std::string error=L10n::Text(m.error);if(m.error==L10n::Key::LoadFailed)error+=std::to_string(m.errorCode);d->AddText(font,18*sc,{rx,y+340*sc},IM_COL32(255,175,147,255),error.c_str(),nullptr,535*sc);}
+  if(button(d,rx,y+ph-102*sc,235*sc,48*sc,L10n::Text(m.enabled?L10n::Key::Disable:L10n::Key::Enable)))enable(m,!m.enabled);
+  if(button(d,rx+250*sc,y+ph-102*sc,285*sc,48*sc,L10n::Text(settings?L10n::Key::Description:L10n::Key::Settings)))settings=!settings;
+  if(button(d,x+16*sc,y+ph-102*sc,295*sc,48*sc,L10n::Text(L10n::Key::Back)))toggleOpen();
  }
  io.MouseDrawCursor=open||(menu.visible&&cursorEnabled&&mouseMode);
  frameMs=frameMs*.95+std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count()*.05;
