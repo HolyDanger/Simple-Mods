@@ -6,7 +6,7 @@ A native mod loader for **Hello Neighbor on Windows x64**. It adds a mod manager
 
 ## Download and install
 
-Download [Simple Mods 0.4](https://github.com/HolyDanger/Simple-Mods/raw/refs/heads/main/downloads/Simple-Mods-0.4.zip), extract the ZIP and run `Install.cmd` with the game closed. Select the folder containing `HelloNeighbor.exe`, then launch the game as usual. Open the Mods entry after Settings or press **F6**. In a Russian game menu the entry is «Моды».
+Download [Simple Mods 0.4](https://github.com/HolyDanger/Simple-Mods/releases/download/v0.4.0/Simple-Mods-0.4.zip), extract the ZIP and run `Install.cmd` with the game closed. Select the folder containing `HelloNeighbor.exe`, then launch the game as usual. Open the Mods entry after Settings or press **F6**. In a Russian game menu the entry is «Моды».
 
 The interface follows the game's language automatically, including changes made while the game is running. Russian uses the Russian interface; other game languages use English. Before the game menu is available, the loader uses the saved culture or Windows language. The installer follows the Windows display language.
 

@@ -1,0 +1,81 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  migrate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish existing versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import io, os, urllib.request, zipfile
+          repo = os.environ["GH_REPO"]
+          commit = "3391a6843e15ad75993c1b0a1c2eebdd0a33d7e0"
+          for version in ("0.3", "0.4"):
+              name = f"Simple-Mods-{version}.zip"
+              source = f"https://raw.githubusercontent.com/{repo}/{commit}/downloads/{name}"
+              with urllib.request.urlopen(source) as response:
+                  data = response.read()
+              with zipfile.ZipFile(io.BytesIO(data)) as original, zipfile.ZipFile(name, "w") as output:
+                  for entry in original.infolist():
+                      content = original.read(entry)
+                      if entry.filename.lower().endswith(".md"):
+                          content = content.decode("utf-8-sig")
+                          for old in ("0.3", "0.4"):
+                              content = content.replace(
+                                  f"https://github.com/{repo}/raw/refs/heads/main/downloads/Simple-Mods-{old}.zip",
+                                  f"https://github.com/{repo}/releases/download/v{old}.0/Simple-Mods-{old}.zip")
+                          content = content.encode("utf-8")
+                      output.writestr(entry, content)
+          PY
+          for version in 0.3 0.4; do
+            tag="v${version}.0"
+            archive="Simple-Mods-${version}.zip"
+            if gh release view "$tag" >/dev/null 2>&1; then
+              continue
+            fi
+            target="$GITHUB_SHA"
+            latest=true
+            if [ "$version" = 0.3 ]; then
+              target=62724ba1f993d46aba7d42ce456ed0c086d5b2b4
+              latest=false
+            fi
+            gh release create "$tag" "$archive" --target "$target" --title "Simple Mods ${version}" --notes "Native mod loader for Hello Neighbor (Windows x64). Documentation: https://simple-11.gitbook.io/simple-docs/en/" --latest="$latest"
+          done
+  build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Build and validate
+        shell: pwsh
+        run: |
+          ./Build.ps1
+          ./build/Release/LocalizationTest.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Localization test failed.' }
+          ./build/Release/ModContractTest.exe (Resolve-Path './build/Release/ExampleMod.dll').Path
+          if ($LASTEXITCODE -ne 0) { throw 'ABI test failed.' }
+      - name: Package and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $archive = ./Package.ps1 -Tag $env:RELEASE_TAG
+          gh release create $env:RELEASE_TAG $archive --verify-tag --title "Simple Mods $env:RELEASE_TAG" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+

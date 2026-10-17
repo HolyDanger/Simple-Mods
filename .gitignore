@@ -6,3 +6,5 @@ Tools/
 *.pdb
 *.log
 payload/xinput1_3.dll
+downloads/
+*.zip
