@@ -1,0 +1,8 @@
+build/
+vendor/
+dist/
+Backups/
+Tools/
+*.pdb
+*.log
+payload/xinput1_3.dll
