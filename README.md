@@ -1,31 +1,33 @@
 # Simple Mods
 
-Нативный загрузчик модов для Hello Neighbor на Windows x64. Добавляет менеджер в главное меню и паузу. В комплект входит CursorMenu: управление меню мышью, включая ползунки и окна подтверждения.
+[English](README.md) | [Русский](README.ru.md)
 
-## Скачать и установить
+A native mod loader for **Hello Neighbor on Windows x64**. It adds a mod manager to the main menu and pause menu. The bundled **CursorMenu** provides mouse controls for menus, sliders and confirmation dialogs.
 
-Скачайте [готовый архив](https://github.com/HolyDanger/Simple-Mods/raw/refs/heads/main/downloads/Simple-Mods-0.3.zip), распакуйте и запустите `Install.cmd` при закрытой игре. Укажите папку с `HelloNeighbor.exe`. После установки запускайте игру как обычно. Менеджер открывается пунктом «Моды» после настроек или клавишей F6.
+## Download and install
 
-Для удаления закройте игру и запустите `Uninstall.cmd`. Настройки и пользовательские моды сохранятся.
+Download [Simple Mods 0.3](https://github.com/HolyDanger/Simple-Mods/raw/refs/heads/main/downloads/Simple-Mods-0.3.zip), extract the ZIP and run `Install.cmd` with the game closed. Select the folder containing `HelloNeighbor.exe`, then launch the game as usual. Open the Mods entry after Settings or press **F6**. In a Russian game menu the entry is «Моды».
 
-Поддерживается GOG-сборка с SHA-256 исполняемого файла `AA057BF03B911838528B2F264009AE2484F2FAE50072A15F312F72645CCB1EA6`. Установщик проверяет совместимость. Другим версиям игры нужен отдельный профиль.
+To uninstall, close the game and run `Uninstall.cmd`. Settings and user mods are preserved.
 
-## Для разработчиков
+Only the GOG executable with SHA-256 `AA057BF03B911838528B2F264009AE2484F2FAE50072A15F312F72645CCB1EA6` is supported. The installer checks compatibility; other builds need a separate profile.
 
-Исходники загрузчика находятся в `src`, заголовок API — в `include`, минимальный мод — в `SDK`. Для сборки нужны CMake, Git, Visual Studio с C++ и Windows SDK. Запустите `Build.ps1`: он загрузит закреплённые версии Dear ImGui и MinHook и соберёт Release x64.
+## Documentation
 
-Мод состоит из `mod.dll` и `mod.ini` в `HelloNeighbor/Binaries/Win64/SimpleMods/mods/<id>/`. После добавления файлов перезапустите игру. Новые моды по умолчанию выключены.
+[English documentation](https://simple-11.gitbook.io/simple-docs/en/) · [Русская документация](https://simple-11.gitbook.io/simple-docs/)
 
-ABI 1 сохраняет имена `NeighborModV1` и `NeighborMod_GetAPI` для совместимости. Это имена программного интерфейса; название загрузчика — Simple Mods.
+The guides cover installation, a first C++ mod, API callbacks, mod names and descriptions, configuration and troubleshooting.
 
-Произвольные моды UE4SS и карты Hello Mod Kit не совместимы с этим API автоматически. DLL выполняются в процессе игры. API 1 предоставляет журнал, отрисовку текста и жизненный цикл мода; игровые хуки и собственные панели настроек в него не входят.
+## Development
 
-Зависимости распространяются на условиях лицензий из `licenses`. Игровые ресурсы, сохранения и инструменты анализа в репозиторий не входят.
+Loader sources are in `src`, the API header is in `include`, and a minimal mod is in `SDK`. Install CMake, Git, Visual Studio with C++ tools and Windows SDK, then run `Build.ps1`. It downloads pinned Dear ImGui and MinHook versions and builds Release x64.
 
+A mod consists of `mod.dll` and `mod.ini` in `HelloNeighbor/Binaries/Win64/SimpleMods/mods/<id>/`. Restart the game after adding files. New mods are disabled by default.
 
-## Обратная связь
+ABI 1 retains the names `NeighborModV1` and `NeighborMod_GetAPI` for binary compatibility. It provides lifecycle callbacks, logging and text drawing. It does not provide gameplay hooks or custom manager settings panels. Arbitrary UE4SS mods and Hello Mod Kit maps are not automatically compatible. Mod DLLs run inside the game process.
 
-Если нашли баг или возникли вопросы, пишите в Telegram: [@themoment233](https://t.me/themoment233). Укажите версию Simple Mods и шаги для повторения проблемы.
+Dependency licenses are in `licenses`. Game assets, saves and analysis tools are not included.
 
-[Документация](https://simple-11.gitbook.io/simple-docs).
+## Bug reports
 
+Contact [@themoment233 on Telegram](https://t.me/themoment233). Include your Simple Mods version and steps to reproduce the problem.
