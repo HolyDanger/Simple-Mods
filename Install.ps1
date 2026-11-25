@@ -52,7 +52,7 @@ try {
         if (-not (Test-Path -LiteralPath $settingsPath)) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'payload\settings.ini') -Destination $settingsPath
         }
-        @{ product='SimpleMods'; version='0.4.0'; sha256=$sourceHash } |
+        @{ product='SimpleMods'; version='0.5.0'; sha256=$sourceHash } |
             ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
         Write-Host (Text 'Simple Mods is installed. Start the game as usual.' 'Simple Mods установлен. Запустите игру обычным способом.')
     }

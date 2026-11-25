@@ -9,7 +9,8 @@ struct NativeMenu { bool visible=false, main=false,capture=false,frontend=false;
 namespace Bridge {
 extern std::atomic<bool> compatible, mouseEnabled, managerOpen;
 bool Init(void (*logger)(const char*));
-NativeMenu Snapshot();
+bool HasGameThread();
+NativeMenu Snapshot(bool includeButtons = true);
 void Select(int index, bool activate);
 void Adjust(int index,int direction);
 void Range(int index,float value);

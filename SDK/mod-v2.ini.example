@@ -1,0 +1,26 @@
+[Mod]
+Name=SDK example
+Description=Shows a configurable label while the mod manager is open.
+Version=1.0.0
+Author=Simple Mods
+
+[Settings]
+Keys=ShowLabel,FontSize,Color
+
+[Setting.ShowLabel]
+Type=Bool
+Label=Show label
+Default=1
+
+[Setting.FontSize]
+Type=Int
+Label=Font size
+Min=12
+Max=42
+Default=22
+
+[Setting.Color]
+Type=Choice
+Label=Color
+Choices=White|Warm yellow
+Default=0

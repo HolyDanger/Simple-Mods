@@ -7,6 +7,11 @@ on:
       - '.github/workflows/release.yml'
       - '.github/release-notes/**'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the version declared in CMakeLists.txt from main
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
@@ -29,18 +34,25 @@ jobs:
             fi
           done
   build:
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && (inputs.publish || github.event.head_commit.message == 'Release Simple Mods 0.5.0'))
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Check release notes
+      - name: Resolve release version
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REF: ${{ github.ref }}
         run: |
-          $notes = Join-Path '.github/release-notes' ($env:RELEASE_TAG + '.md')
+          $tag = $env:SOURCE_REF -replace '^refs/tags/', ''
+          if ($env:SOURCE_REF -eq 'refs/heads/main') {
+            $version = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\(SimpleMods VERSION ([0-9.]+)').Groups[1].Value
+            $tag = "v$version"
+          }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid release tag.' }
+          $notes = Join-Path '.github/release-notes' ($tag + '.md')
           if (-not (Test-Path -LiteralPath $notes)) { throw 'Write version-specific release notes before publishing a tag.' }
           if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notes -Raw))) { throw 'Release notes cannot be empty.' }
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build and validate
         shell: pwsh
         run: |
@@ -49,14 +61,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Localization test failed.' }
           ./build/Release/ModContractTest.exe (Resolve-Path './build/Release/ExampleMod.dll').Path
           if ($LASTEXITCODE -ne 0) { throw 'ABI test failed.' }
+          ./build/Release/ModManifestTest.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest test failed.' }
+          ./build/Release/ModContractV2Test.exe (Resolve-Path './build/Release/ExampleModV2.dll').Path
+          if ($LASTEXITCODE -ne 0) { throw 'SDK 2 test failed.' }
       - name: Package and publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $archive = ./Package.ps1 -Tag $env:RELEASE_TAG
           $notes = Join-Path '.github/release-notes' ($env:RELEASE_TAG + '.md')
-          gh release create $env:RELEASE_TAG $archive --verify-tag --title "Simple Mods $env:RELEASE_TAG" --notes-file $notes
+          $targetArgs = if ($env:GITHUB_REF -eq 'refs/heads/main') { @('--target', $env:GITHUB_SHA) } else { @('--verify-tag') }
+          gh release create $env:RELEASE_TAG $archive @targetArgs --title "Simple Mods $env:RELEASE_TAG" --notes-file $notes
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+

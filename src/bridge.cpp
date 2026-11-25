@@ -1,4 +1,5 @@
 #include "bridge.h"
+#include "runtime.h"
 #include "MinHook.h"
 #include "localization.h"
 #include <cstdint>
@@ -52,6 +53,7 @@ void cursor(U m,bool enable){
     changedPC=pc;changedOffset=off;mask=fm;oldBit=read<unsigned char>(pc+off)&fm;*(unsigned char*)(pc+off)|=fm;
 }
 thread_local bool nested=false; ULONGLONG lastUpdate=0;
+static std::atomic<DWORD> gameThread=0;
 struct Translation { U widget; float value[2]; };
 U layoutMenu=0;std::vector<Translation> moved;
 U pauseModButton=0,pauseModOwner=0,pauseModText=0,frontLabel=0;
@@ -263,14 +265,24 @@ void update(){
 void __fastcall hook(U self,U function,void* params){
     original(self,function,params);
     if(nested)return;
+    DWORD tid=GetCurrentThreadId();
+    auto known=gameThread.load(std::memory_order_relaxed);
+    if(known&&tid!=known)return;
     U cl=read<U>(self+16);int id=read<int>(cl+24);if(popupNames.count(id)&&valid(self))popup=self;if(id==inputPopupName&&valid(self))inputPopup=self;
-    if(read<U>(self+16)==menuClass&&valid(self)&&prop(self,"GameInstance")){menu=self;}
+    if(cl==menuClass&&valid(self)&&prop(self,"GameInstance")){menu=self;}
     if(cl==startClass&&valid(self)&&prop(self,"GameInstance"))startMenu=self;
+    if(!known){
+        if(self!=menu&&self!=startMenu)return;
+        gameThread.store(tid,std::memory_order_relaxed);
+    }
     auto now=GetTickCount64();if(now-lastUpdate<30)return;
-    DWORD tid=GetCurrentThreadId();static DWORD gameThread=0;
-    if(self==menu||self==startMenu||self==popup)gameThread=tid;if(!gameThread||tid!=gameThread)return;
-    nested=true;lastUpdate=now;update();nested=false;
+    nested=true;
+    lastUpdate=now;
+    update();
+    RunModGameTasks();
+    nested=false;
 }
+bool HasGameThread(){return gameThread.load(std::memory_order_relaxed)!=0;}
 bool Init(void(*logger)(const char*)){
     logMessage=logger;base=(U)GetModuleHandleW(nullptr);auto dos=(IMAGE_DOS_HEADER*)base;auto nt=(IMAGE_NT_HEADERS*)(base+dos->e_lfanew);
     if(nt->FileHeader.TimeDateStamp!=1545572128||nt->OptionalHeader.SizeOfImage!=55848960){logger("Native menu: unsupported executable profile; F6 manager remains available.");return false;}
@@ -284,8 +296,20 @@ bool Init(void(*logger)(const char*)){
     if(MH_CreateHook((void*)(base+0x8049d0),(void*)hook,(void**)&original)!=MH_OK||MH_EnableHook((void*)(base+0x8049d0))!=MH_OK){logger("Native menu: could not install callback.");return false;}
     compatible=true;logger("Native menu bridge ready (GOG profile, reflected geometry).");return true;
 }
-NativeMenu Snapshot(){std::lock_guard<std::mutex>g(lock);return snapshot;}
-void queue(int index,uint32_t flags){int screen=Snapshot().screen;if(screen<0)return;int64_t value=((int64_t)screen<<32)|(index&0xffff)|(int64_t)flags;
+NativeMenu Snapshot(bool includeButtons){
+    std::lock_guard<std::mutex> guard(lock);
+    if(includeButtons)return snapshot;
+    NativeMenu menu;
+    menu.visible=snapshot.visible;
+    menu.main=snapshot.main;
+    menu.capture=snapshot.capture;
+    menu.frontend=snapshot.frontend;
+    menu.screen=snapshot.screen;
+    menu.selected=snapshot.selected;
+    menu.modIndex=snapshot.modIndex;
+    return menu;
+}
+void queue(int index,uint32_t flags){int screen=Snapshot(false).screen;if(screen<0)return;int64_t value=((int64_t)screen<<32)|(index&0xffff)|(int64_t)flags;
     if(flags||index==0xfffe){requested=value;return;}
     auto previous=requested.load();do{if(previous>=0&&((previous&0xf0000)||(previous&0xffff)==0xfffe))return;}while(!requested.compare_exchange_weak(previous,value));
 }

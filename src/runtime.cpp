@@ -2,7 +2,10 @@
 #include "runtime.h"
 #include "bridge.h"
 #include "localization.h"
-#include "NeighborMod.h"
+#include "NeighborModV2.h"
+#include "mod_manifest.h"
+#include <utility>
+#include <deque>
 #include "MinHook.h"
 #include "imgui.h"
 #include "backends/imgui_impl_dx11.h"
@@ -29,7 +32,27 @@ static int activeMod=0,hoveredNative=-1,modListTop=0;
 static double frameMs=0;static ImFont* font=nullptr;static ImFont* nativeFont=nullptr;
 using Present=HRESULT(WINAPI*)(IDXGISwapChain*,UINT,UINT);static Present originalPresent=nullptr;
 using Resize=HRESULT(WINAPI*)(IDXGISwapChain*,UINT,UINT,UINT,DXGI_FORMAT,UINT);static Resize originalResize=nullptr;
-struct Mod { std::wstring id;std::string name,description,version,author;L10n::Key error=L10n::Key::None;DWORD errorCode=0;fs::path dir;bool enabled=false,builtin=false,active=false;HMODULE dll=nullptr;const NeighborModV1* api=nullptr;};
+struct Mod {
+    std::wstring id;
+    std::string name, nameRu, description, descriptionRu, version, author, detail;
+    L10n::Key error = L10n::Key::None;
+    fs::path dir;
+    std::vector<Manifest::Setting> fields;
+    std::vector<std::wstring> requires, conflicts;
+    bool enabled = false, builtin = false, active = false, autoEnable = false, manifestWarning = false;
+    bool gameTaskFailed = false;
+    int startState = 0;
+    uint32_t contextBits = UINT32_MAX;
+    HMODULE dll = nullptr;
+    NeighborModV1 api1{};
+    NeighborModV2 api2{};
+    NeighborHostV2 host2{};
+};
+static bool safeMode = false;
+static thread_local bool drawingModFrame = false;
+static int fieldIndex = 0, fieldTop = 0;
+static int pendingToggle = -1, pendingSettingMod = -1, pendingSettingIndex = 0;
+static int pendingAdjustment = 0;
 static std::vector<Mod> mods;
 static std::wstring wide(const std::string&s){if(s.empty())return {};int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,s.data(),(int)s.size(),nullptr,0);std::wstring r(n,0);if(n)MultiByteToWideChar(CP_UTF8,0,s.data(),(int)s.size(),r.data(),n);return r;}
 static std::string utf8(const std::wstring&s){int n=WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),nullptr,0,nullptr,nullptr);std::string r(n,0);if(n)WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),r.data(),n,nullptr,nullptr);return r;}
@@ -41,34 +64,94 @@ static void initialLanguage(){
  for(const auto* file:{L"Engine.ini",L"GameUserSettings.ini"}){auto culture=ini(config/file,L"Internationalization",L"Culture");if(!culture.empty())L10n::russian=L10n::IsRussian(culture);}
 }
 void Log(const char* s){std::lock_guard<std::mutex>g(logLock);if(root.empty())return;std::ofstream out(root/L"SimpleMods.log",std::ios::app);SYSTEMTIME t{};GetLocalTime(&t);char b[64];sprintf_s(b,"[%02d:%02d:%02d] ",t.wHour,t.wMinute,t.wSecond);out<<b<<s<<'\n';}
-static void save(){auto path=root/L"settings.ini";WritePrivateProfileStringW(L"CursorMenu",L"Enabled",cursorEnabled?L"1":L"0",path.c_str());WritePrivateProfileStringW(L"CursorMenu",L"Control",mouseMode?L"Mouse":L"Keyboard",path.c_str());for(auto&m:mods)if(!m.builtin)WritePrivateProfileStringW(L"Mods",m.id.c_str(),m.enabled?L"1":L"0",path.c_str());Bridge::SetMouse(cursorEnabled&&mouseMode);}
-static void drawText(float x,float y,float size,uint32_t col,const char* s){if(ImGui::GetCurrentContext()&&s)ImGui::GetForegroundDrawList()->AddText(font,size,{x,y},col,s);}
-static NeighborHostV1 host{sizeof(host),1,Log,drawText};
-static int safeEnable(const NeighborModV1* api){__try{return api->OnEnable?api->OnEnable(&host):1;}__except(EXCEPTION_EXECUTE_HANDLER){return 0;}}
-static bool safeDisable(const NeighborModV1* api){__try{if(api->OnDisable)api->OnDisable();return true;}__except(EXCEPTION_EXECUTE_HANDLER){return false;}}
-static bool safeFrame(const NeighborModV1* api,const NeighborFrameV1* f){__try{if(api->OnFrame)api->OnFrame(f);return true;}__except(EXCEPTION_EXECUTE_HANDLER){return false;}}
-static const NeighborModV1* safeEntry(NeighborModEntry entry){__try{return entry(1);}__except(EXCEPTION_EXECUTE_HANDLER){return nullptr;}}
-static void enable(Mod& m,bool value){
- if(m.builtin){cursorEnabled=value;m.enabled=value;m.active=value;save();return;}
- if(!value){if(m.active&&m.api&&!safeDisable(m.api))m.error=L10n::Key::DisableFailed;m.active=false;m.enabled=false;save();return;}
- m.error=L10n::Key::None;m.errorCode=0;if(!m.dll){auto p=m.dir/L"mod.dll";if(!fs::is_regular_file(p)){m.error=L10n::Key::MissingDll;return;}m.dll=LoadLibraryExW(p.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);if(!m.dll){m.errorCode=GetLastError();m.error=L10n::Key::LoadFailed;return;}auto entry=(NeighborModEntry)GetProcAddress(m.dll,"NeighborMod_GetAPI");if(!entry){m.error=L10n::Key::UnsupportedAbi;return;}m.api=safeEntry(entry);if(!m.api||m.api->size<sizeof(NeighborModV1)||m.api->abi!=1){m.api=nullptr;m.error=L10n::Key::InvalidApi;return;}}
- if(m.api&&safeEnable(m.api)){m.enabled=m.active=true;Log(("Enabled mod: "+m.name).c_str());}else m.error=L10n::Key::EnableFailed;save();
+#include "mod_runtime.inl"
+
+static void openSettings(bool show) {
+    settings = show;
+    fieldIndex = fieldTop = 0;
 }
-static void loadMods(){
- auto cfg=root/L"settings.ini";cursorEnabled=ini(cfg,L"CursorMenu",L"Enabled",L"1")==L"1";mouseMode=ini(cfg,L"CursorMenu",L"Control",L"Mouse")!=L"Keyboard";
- Mod builtin;builtin.id=L"CursorMenu";builtin.name="CursorMenu";builtin.version="0.4.0";builtin.author="Simple Mods";builtin.enabled=builtin.active=cursorEnabled;builtin.builtin=true;mods.push_back(builtin);
- std::error_code ec;fs::create_directories(root/L"mods",ec);
- for(auto&d:fs::directory_iterator(root/L"mods",ec)){if(!d.is_directory())continue;auto p=d.path()/L"mod.ini";if(!fs::is_regular_file(p))continue;Mod m;m.id=d.path().filename().wstring();m.dir=d.path();m.name=utf8(ini(p,L"Mod",L"Name",m.id.c_str()));m.description=utf8(ini(p,L"Mod",L"Description"));m.version=utf8(ini(p,L"Mod",L"Version",L"1.0"));m.author=utf8(ini(p,L"Mod",L"Author",L"Неизвестен"));m.enabled=ini(cfg,L"Mods",m.id.c_str(),L"0")==L"1";mods.push_back(m);}
- Bridge::SetMouse(cursorEnabled&&mouseMode);
+
+static void toggleOpen() {
+    open = !open.load();
+    Bridge::managerOpen = open.load();
+    openSettings(false);
 }
-static void toggleOpen(){open=!open.load();Bridge::managerOpen=open.load();settings=false;}
+
+static void adjustSetting(Mod& mod, Manifest::Setting& field, int step) {
+    int64_t value = static_cast<int64_t>(field.value) + step;
+    if (field.kind == Manifest::Kind::Toggle) value = 1 - field.value;
+    else if (field.kind == Manifest::Kind::Choice) {
+        if (value < field.min) value = field.max;
+        if (value > field.max) value = field.min;
+    }
+    changeSetting(mod, field, static_cast<int>(std::clamp(value,
+        static_cast<int64_t>(field.min), static_cast<int64_t>(field.max))));
+}
+
+static void managerKey(WPARAM key) {
+    auto& mod = mods[activeMod];
+    if (key == VK_ESCAPE) {
+        if (settings) openSettings(false); else toggleOpen();
+    } else if (key == 'S') {
+        openSettings(!settings);
+    } else if (key == VK_UP || key == VK_DOWN) {
+        const int step = key == VK_UP ? -1 : 1;
+        if (settings && !mod.fields.empty()) {
+            fieldIndex = std::clamp(fieldIndex + step, 0, static_cast<int>(mod.fields.size()) - 1);
+        } else {
+            const int selected = std::clamp(activeMod + step, 0, static_cast<int>(mods.size()) - 1);
+            if (selected != activeMod) {
+                activeMod = selected;
+                openSettings(false);
+            }
+        }
+    } else if (settings && (key == VK_LEFT || key == VK_RIGHT)) {
+        if (mod.builtin) {
+            mouseMode = key == VK_LEFT;
+            saveCursor();
+        } else if (!mod.fields.empty()) {
+            pendingSettingMod = activeMod;
+            pendingSettingIndex = fieldIndex;
+            pendingAdjustment = key == VK_LEFT ? -1 : 1;
+        }
+    } else if (key == VK_SPACE || key == VK_RETURN) {
+        pendingToggle = activeMod;
+    }
+}
+
+static void dispatchModCallbacks(const NativeMenu& menu, const NeighborFrameV1* frame) {
+    const uint32_t kind = !menu.visible ? NeighborMenuHidden :
+        (menu.frontend ? NeighborMenuMain : NeighborMenuPause);
+    NeighborContextV2 context{sizeof(context), kind, open ? 1u : 0u, L10n::russian ? 1u : 0u};
+    const uint32_t bits = kind | (context.managerOpen << 2) | (context.russian << 3);
+    for (auto& mod : mods) {
+        if (mod.builtin || !mod.active) continue;
+        if (mod.gameTaskFailed) {
+            disableMod(mod, L10n::Key::CallbackFailed);
+            continue;
+        }
+        ModCallbackScope scope(mod);
+        if (mod.api2.OnContextChanged && mod.contextBits != bits) {
+            mod.contextBits = bits;
+            if (!safeContext(mod, &context)) {
+                disableMod(mod, L10n::Key::CallbackFailed);
+                continue;
+            }
+        }
+        if (!frame) continue;
+        drawingModFrame = true;
+        const bool ok = safeFrame(mod, frame);
+        drawingModFrame = false;
+        if (!ok) disableMod(mod, L10n::Key::FrameFailed);
+    }
+}
 static LRESULT CALLBACK wndProc(HWND w,UINT msg,WPARAM wp,LPARAM lp){
  std::unique_lock<std::recursive_mutex> guard(uiLock);
- auto menu=Bridge::Snapshot();
+ auto menu=Bridge::Snapshot(false);
  if(initialized&&(open||menu.visible))ImGui_ImplWin32_WndProcHandler(w,msg,wp,lp);
  if(msg==WM_KEYDOWN&&!(lp&(1LL<<30))){
   if(wp==VK_F6&&!menu.capture){toggleOpen();return 0;}
-  if(open){if(wp==VK_ESCAPE){if(settings)settings=false;else toggleOpen();}else if(wp==VK_UP)activeMod=std::max(0,activeMod-1);else if(wp==VK_DOWN)activeMod=std::min((int)mods.size()-1,activeMod+1);else if(wp=='S')settings=!settings;else if(wp==VK_SPACE||wp==VK_RETURN)enable(mods[activeMod],!mods[activeMod].enabled);else if(settings&&(wp==VK_LEFT||wp==VK_RIGHT)&&mods[activeMod].builtin){mouseMode=!mouseMode;save();}return 0;}
+  if(open){managerKey(wp);return 0;}
   if(menu.visible&&menu.main){if(menu.frontend){if(wp==VK_RETURN&&menu.selected==menu.modIndex){toggleOpen();return 0;}}else{if(!modsSelected&&((wp==VK_DOWN&&menu.selected==5)||(wp==VK_UP&&menu.selected==6))){modsSelected=true;Bridge::SetModFocus(true);return 0;}if(modsSelected){if(wp==VK_UP||wp==VK_DOWN){modsSelected=false;Bridge::SetModFocus(false);Bridge::Select(wp==VK_UP?5:6,false);return 0;}if(wp==VK_RETURN){toggleOpen();return 0;}}}}
  }
  if(open&&(msg>=WM_KEYFIRST&&msg<=WM_KEYLAST||msg>=WM_MOUSEFIRST&&msg<=WM_MOUSELAST||msg==WM_INPUT))return 0;
@@ -93,19 +176,45 @@ static void loadFonts(){
  if(!nativeFont)nativeFont=font;io.FontDefault=font;
 }
 static HRESULT WINAPI present(IDXGISwapChain*s,UINT sync,UINT flags){
+ if(callbackOwner)return originalPresent(s,sync,flags);
  if(window&&Bridge::TakeActivation()){PostMessageW(window,WM_KEYDOWN,VK_RETURN,1);PostMessageW(window,WM_KEYUP,VK_RETURN,0xc0000001);}
  std::unique_lock<std::recursive_mutex> guard(uiLock);
- if(!initialized){DXGI_SWAP_CHAIN_DESC desc{};s->GetDesc(&desc);if(!IsWindow(desc.OutputWindow)||FAILED(s->GetDevice(__uuidof(ID3D11Device),(void**)&device))){guard.unlock();return originalPresent(s,sync,flags);}window=desc.OutputWindow;device->GetImmediateContext(&context);makeTarget(s);IMGUI_CHECKVERSION();ImGui::CreateContext();auto&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;loadFonts();ImGui_ImplWin32_Init(window);ImGui_ImplDX11_Init(device,context);SetLastError(0);oldWndProc=(WNDPROC)SetWindowLongPtrW(window,GWLP_WNDPROC,(LONG_PTR)wndProc);if(!oldWndProc)Log("Warning: WndProc installation failed");initialized=true;Log("DirectX 11 overlay initialized.");for(auto&m:mods)if(!m.builtin&&m.enabled)enable(m,true);}
- auto menu=Bridge::Snapshot();bool anyMod=false;for(auto&m:mods)if(!m.builtin&&m.active&&m.api&&m.api->OnFrame)anyMod=true;
- if(!open&&!menu.visible&&!anyMod){guard.unlock();return originalPresent(s,sync,flags);}
+ if(!initialized){DXGI_SWAP_CHAIN_DESC desc{};s->GetDesc(&desc);if(!IsWindow(desc.OutputWindow)||FAILED(s->GetDevice(__uuidof(ID3D11Device),(void**)&device))){guard.unlock();return originalPresent(s,sync,flags);}window=desc.OutputWindow;device->GetImmediateContext(&context);makeTarget(s);IMGUI_CHECKVERSION();ImGui::CreateContext();auto&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;loadFonts();ImGui_ImplWin32_Init(window);ImGui_ImplDX11_Init(device,context);SetLastError(0);oldWndProc=(WNDPROC)SetWindowLongPtrW(window,GWLP_WNDPROC,(LONG_PTR)wndProc);if(!oldWndProc)Log("Warning: WndProc installation failed");initialized=true;Log("DirectX 11 overlay initialized.");if(!safeMode)for(auto& mod:mods)startMod(mod);}
+ if(pendingToggle >= 0) {
+     auto& mod = mods[std::exchange(pendingToggle, -1)];
+     enable(mod, !mod.enabled);
+ }
+ if(pendingSettingMod >= 0) {
+     auto& mod = mods[std::exchange(pendingSettingMod, -1)];
+     adjustSetting(mod, mod.fields[pendingSettingIndex], pendingAdjustment);
+ }
+ const auto menu = Bridge::Snapshot(!open.load());
+ const bool anyFrame = std::any_of(mods.begin(), mods.end(), [](const Mod& mod) {
+     return mod.active && (mod.api1.OnFrame || mod.api2.OnFrame);
+ });
+ if(!open && !menu.visible && !anyFrame) {
+     if (modsSelected) {
+         modsSelected = false;
+         Bridge::SetModFocus(false);
+     }
+     dispatchModCallbacks(menu, nullptr);
+     guard.unlock();
+     return originalPresent(s, sync, flags);
+ }
  if(!target)makeTarget(s);
- ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();ui();NeighborFrameV1 frame{sizeof(frame),ImGui::GetIO().DisplaySize.x,ImGui::GetIO().DisplaySize.y,ImGui::GetIO().DeltaTime,open?1:0};for(auto&m:mods)if(!m.builtin&&m.active&&m.api&&!safeFrame(m.api,&frame)){m.active=m.enabled=false;m.error=L10n::Key::FrameFailed;Log(("Mod frame failed: "+m.name).c_str());}
+ ImGui_ImplDX11_NewFrame();
+ ImGui_ImplWin32_NewFrame();
+ ImGui::NewFrame();
+ ui(menu);
+ const auto& io = ImGui::GetIO();
+ NeighborFrameV1 frame{sizeof(frame), io.DisplaySize.x, io.DisplaySize.y, io.DeltaTime, open ? 1 : 0};
+ dispatchModCallbacks(menu, &frame);
  ImGui::Render();if(target){ID3D11RenderTargetView*previous=nullptr;ID3D11DepthStencilView*depth=nullptr;context->OMGetRenderTargets(1,&previous,&depth);context->OMSetRenderTargets(1,&target,nullptr);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());context->OMSetRenderTargets(1,&previous,depth);if(previous)previous->Release();if(depth)depth->Release();}
  guard.unlock();return originalPresent(s,sync,flags);
 }
 static HRESULT WINAPI resize(IDXGISwapChain*s,UINT n,UINT w,UINT h,DXGI_FORMAT fmt,UINT flags){std::unique_lock<std::recursive_mutex>guard(uiLock);if(target){target->Release();target=nullptr;}guard.unlock();return originalResize(s,n,w,h,fmt,flags);}
 DWORD WINAPI StartRuntime(void*){
- wchar_t path[MAX_PATH]{};GetModuleFileNameW(gModule,path,MAX_PATH);root=fs::path(path).parent_path()/L"SimpleMods";std::error_code ec;fs::create_directories(root,ec);initialLanguage();Log("Simple Mods 0.4 starting; custom C++ runtime, ABI 1.");loadMods();
+ wchar_t path[MAX_PATH]{};GetModuleFileNameW(gModule,path,MAX_PATH);root=fs::path(path).parent_path()/L"SimpleMods";std::error_code ec;fs::create_directories(root,ec);initialLanguage();Log("Simple Mods 0.5 starting (ABI 1 and 2).");loadMods();
  if(MH_Initialize()!=MH_OK){Log("MinHook initialization failed");return 1;}
  WNDCLASSW wc{};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=gModule;wc.lpszClassName=L"NeighborModsProbe";RegisterClassW(&wc);HWND dummy=CreateWindowW(wc.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,64,64,nullptr,nullptr,gModule,nullptr);
  DXGI_SWAP_CHAIN_DESC desc{};desc.BufferCount=1;desc.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.OutputWindow=dummy;desc.SampleDesc.Count=1;desc.Windowed=TRUE;desc.SwapEffect=DXGI_SWAP_EFFECT_DISCARD;IDXGISwapChain*chain=nullptr;ID3D11Device*dev=nullptr;ID3D11DeviceContext*ctx=nullptr;

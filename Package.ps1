@@ -13,6 +13,7 @@ foreach ($name in @('payload','SDK','licenses')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $stage -Recurse
 }
 Copy-Item -LiteralPath 'build/Release/xinput1_3.dll' -Destination (Join-Path $stage 'payload/xinput1_3.dll') -Force
+Copy-Item -LiteralPath 'include/NeighborModV2.h' -Destination (Join-Path $stage 'SDK')
 $archive = Join-Path $PSScriptRoot ("dist/Simple-Mods-" + $version + ".zip")
 Compress-Archive -Path ($stage + '/*') -DestinationPath $archive
 Write-Output $archive

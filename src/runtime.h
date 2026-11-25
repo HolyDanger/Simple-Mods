@@ -4,4 +4,5 @@
 extern HMODULE gModule;
 void Log(const char*);
 DWORD WINAPI StartRuntime(void*);
+void RunModGameTasks();
 
